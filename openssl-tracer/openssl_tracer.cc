@@ -125,12 +125,34 @@ const PerfBufferSpec kPerfBufferSpec = {
   if (x != 0) return 1;
 
 int main(int argc, char** argv) {
-  // Read arguments to get the target PID to trace.
-  if (argc != 2) {
-    std::cerr << "Usage: " << argv[0] << " <PID to trace for SSL traffic>" << std::endl;
+  // Usage:
+  //   openssl_tracer <PID> [-s]
+  // If -s is specified, uprobes will be attached to the process binary (/proc/<PID>/exe) for static linking.
+
+  if (argc < 2 || argc > 3) {
+    std::cerr << "Usage: " << argv[0] << " <PID to trace for SSL traffic> [-s]" << std::endl;
     exit(1);
   }
   std::string target_pid(argv[1]);
+
+  // Default to dynamic OpenSSL library path
+  std::string obj_path = "/usr/lib/x86_64-linux-gnu/libssl.so.3";
+  if (argc == 3 && std::string(argv[2]) == "-s") {
+    obj_path = "/proc/" + target_pid + "/exe";
+    std::cout << "[INFO] Static mode enabled: uprobes will be attached to the process binary (" << obj_path << ")." << std::endl;
+    std::cout << "[INFO] If symbols are stripped, tracing may fail or require manual offsets." << std::endl;
+  }
+
+  // Update obj_path for all UProbeSpecs
+  std::vector<UProbeSpec> uprobe_specs = {
+    kSSLWriteEntryProbeSpec, kSSLWriteRetProbeSpec,
+    kSSLWriteExEntryProbeSpec, kSSLWriteExRetProbeSpec,
+    kSSLReadEntryProbeSpec, kSSLReadRetProbeSpec,
+    kSSLReadExEntryProbeSpec, kSSLReadExRetProbeSpec
+  };
+  for (auto& spec : uprobe_specs) {
+    spec.obj_path = obj_path;
+  }
 
   BCCWrapper bcc;
 
@@ -143,7 +165,7 @@ int main(int argc, char** argv) {
   RETURN_IF_ERROR(bcc.Init(bpf_code, {"-DTRACE_PID=" + target_pid}));
 
   // Deploy uprobes.
-  for (auto& probe_spec : kUProbes) {
+  for (auto& probe_spec : uprobe_specs) {
     RETURN_IF_ERROR(bcc.AttachUProbe(probe_spec));
   }
 
